@@ -8,7 +8,7 @@ import logging
 import xml_utils
 
 def handle_keyboard_interrupt(signum, frame):
-    logging.info("Přijat Ctrl+C KeyboardInterrupt. Přerušuji.")
+    logging.info("Received Ctrl+C (KeyboardInterrupt). Aborting.")
     raise SystemExit
 
 def setup_signal_handler():
@@ -34,13 +34,13 @@ def setup_logging(log_file='BME_parse.log', log_level=logging.DEBUG):
 # Print help
 def print_help():
     help_message = """
-    Použití: BME-tool.exe <XML_soubor>
+    Usage: BME-tool.exe <XML_file>
     
-    Argumenty:
-        <XML_soubor> : Cesta k BMEcat(ETIM) XML souboru.
+    Arguments:
+        <XML_file> : Path to the BMEcat (ETIM) XML file.
     
-    Pokud není zadán žádný argument nebo pokud zadaný argument není platný soubor XML, zobrazí se tato nápověda.
-    Zpracování lze přerušit zkratkou 'Ctrl + C'
+    If no argument is given or if the provided argument is not a valid XML file, this help will be shown.
+    Processing can be interrupted with 'Ctrl + C'.
     """
     print(help_message)
 
@@ -68,15 +68,15 @@ def main():
             
         else:
             logger = setup_logging(log_file = "error_log.txt")
-            logger.error(f"Soubor '{droppedFile}' neexistuje.")
+            logger.error(f"File '{droppedFile}' does not exist.")
             print_help()
             return
         
     else:
         print_help()
-        print("Stiskněte libovolnou klávesu pro ukončení . . .")
+        print("Press any key to exit...")
         os.system('pause >nul')
-        #input("Stiskněte libovolnou klávesu pro ukončení . . .")
+        #input("Press any key to exit...")
 
 if __name__ == "__main__":
     setup_signal_handler()
