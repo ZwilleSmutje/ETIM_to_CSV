@@ -11,11 +11,11 @@ import bme_parser
 # Main Process XML data.
 def xml_parse(file_path, logger):
     file_name = os.path.splitext(os.path.basename(file_path))[0]
-    logger.info(f"Spuštění nové úlohy")
-    logger.info(f"Zpracovávání souboru: {file_name}")
+    logger.info(f"Starting a new job")
+    logger.info(f"Processing file: {file_name}")
     # Get encoding
     encoding = get_encoding_prolog(file_path, logger)
-    logger.debug(f"Znaková sada XML souboru: {encoding}")
+    logger.debug(f"XML file encoding: {encoding}")
     # Check doctype and bmecat tags
     if check_bmecat_and_doctype(file_path, logger, encoding):
         try:
@@ -29,10 +29,10 @@ def xml_parse(file_path, logger):
             bme_parser.parse_BME_products(ET_root, file_name, logger)
 
         except Exception as e:
-            logger.error(f"Chyba funkce xml_parse: {e}")  
+            logger.error(f"Error in function xml_parse: {e}")  
             logger.error(traceback.format_exc())
     else:
-        logger.warning(f"Pokus jako obecný xml soubor")
+        logger.warning(f"Attempting as a generic xml file")
         ET_root = get_xml_root(file_path, logger)
         save_generic_xml(ET_root, file_name, logger)
 
@@ -41,7 +41,7 @@ def get_encoding_prolog(file_path, logger):
     ENCODINGS_TO_TRY = ['utf-8', 'utf-16', 'windows-1252', 'latin-1']
     for encoding in ENCODINGS_TO_TRY:
         try:
-            logger.info(f"Soubor zkouším otevřít pomocí kódování: {encoding}")
+            logger.info(f"Trying to open file using encoding: {encoding}")
             with open(file_path, 'r', encoding=encoding) as file:
                 content = file.read(1024).strip()  # Read first 1024 characters
                 # Regular expression to match XML prolog with encoding attribute
@@ -51,31 +51,31 @@ def get_encoding_prolog(file_path, logger):
                     prolog = prolog_match.group(0).strip()
                     declared_encoding = prolog_match.group(2)  # Capture the encoding if present
                     standalone = prolog_match.group(4)  # Capture the standalone attribute if present
-                    logger.info(f"XML prolog je validní, znaková sada prologu je: {declared_encoding}")
+                    logger.info(f"XML prolog is valid, prolog encoding is: {declared_encoding}")
                     logger.debug(f"XML prolog: {prolog}")
                     if standalone:
-                        logger.debug(f"Standalone atribut v prologu: {standalone}")
+                        logger.debug(f"Standalone attribute in prolog: {standalone}")
                     if declared_encoding is None:
-                        logger.warning(f"Prolog znakové sada nenalezen. Výchozí znaková sada: {encoding}")
+                        logger.warning(f"Prolog encoding not found. Default encoding: {encoding}")
                         return encoding
                     return declared_encoding
                 else:
-                    logger.error(f"Nenalezen XML prolog. Nastavena znaková sada: {encoding}")
+                    logger.error(f"XML prolog not found. Using encoding: {encoding}")
                     return encoding
         except Exception as e:
-            logger.error(f"Chyba funkce check_xml_prolog: {e}")
+            logger.error(f"Error in function check_xml_prolog: {e}")
 
 # Check DOCTYPE & BMECAT tags
 def check_bmecat_and_doctype(file_path, logger, encoding='utf-8'):
-    # Helper Extract tag for check DOCTYPE & BMECAT
+    # Helper Extract tag for check DOCTYPE & BMEСAT
     def extract_tag(content, tag_name, logger):
         tag_start = content.find(tag_name)
         if tag_start != -1:
             tag_end = content.find('>', tag_start) + 1  # Include the closing '>'
             tag_content = content[tag_start:tag_end]
-            logger.debug(f"{tag_name} nalezen: {tag_content}")
+            logger.debug(f"{tag_name} found: {tag_content}")
             return tag_content
-        logger.info(f"Nenalezen {tag_name}")
+        logger.info(f"{tag_name} not found")
       
     try:
         with open(file_path, 'r', encoding=encoding) as file:
@@ -85,13 +85,13 @@ def check_bmecat_and_doctype(file_path, logger, encoding='utf-8'):
             BMECAT_content = extract_tag(content, '<BMECAT', logger)
             if BMECAT_content is not None:
                 if "version=\"2005\"" in BMECAT_content:
-                    logger.info("BMEcatalog verze: 2005")
+                    logger.info("BMEcatalog version: 2005")
                 return True
             else:
-                logger.error("Soubor není v ETIM formátu")
+                logger.error("File is not in ETIM format")
                 return False
     except Exception as e:
-        logger.error(f"Chyba funkce validate_BMEcat: {e}")
+        logger.error(f"Error in function validate_BMEcat: {e}")
         return False
 
 # Validate XML
@@ -100,23 +100,23 @@ def get_xml_root(file_path, logger):
         # Parse the XML file
         tree = ET.parse(file_path)
         root = tree.getroot()
-        logger.info("XML soubor je validní.")
+        logger.info("XML file is valid.")
         # Check if there is a namespace        
         if '}' in root.tag:
             namespace = root.tag.split('}')[0].strip('{')  # Get the namespace URI
             logger.info(f"Namespace: {namespace}")
         else:
             namespace = None
-            logger.info("Namespace nenalezen.")
+            logger.info("Namespace not found.")
         # Strip namespace
         for elem in root.iter():
             elem.tag = elem.tag.split("}")[-1]  # Strip namespace from each tag
         return root
     except ET.ParseError as e:
-        logger.error(f"Chyba v XML souboru: {e}")
+        logger.error(f"Error in XML file: {e}")
         return None
     except Exception as e:
-        logger.error(f"Chyba funkce validate_xml: {e}")
+        logger.error(f"Error in function validate_xml: {e}")
         return None
         
 
@@ -146,7 +146,6 @@ def save_generic_xml(xml_root, output_csv, logger):
             writer = csv.DictWriter(csvfile, fieldnames=all_columns)
             writer.writeheader()
             writer.writerows(products)
-        logger.info(f"Uložen soubor: {output_csv}")
+        logger.info(f"Saved file: {output_csv}")
     else:
-        logger.error(f"Žádná data k uložení: {output_csv}")
-        
+        logger.error(f"No data to save: {output_csv}")
