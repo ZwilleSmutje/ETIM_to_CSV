@@ -16,7 +16,7 @@ def create_key(tag, attributes):
 # Recursive XML Parsing
 def parse_element(element, logger):
     if element is None:
-        logger.warning("Element nenalezen (None).")
+        logger.warning("Element not found (None).")
         return None
 
     parsed_data = {}
@@ -50,10 +50,12 @@ def flatten_dict(d, parent_key="", sep="_"):
             items.append((new_key, v))
     return dict(items)
 
+
+
 # Generic CSV Writing Function
 def save_to_csv(file_name, data, logger):
     if not data:
-        logger.warning(f"Žádná data k uložení: {file_name}.csv")
+        logger.warning(f"No Data to Save: {file_name}.csv")
         return
     
     os.makedirs("output", exist_ok=True)
@@ -70,45 +72,43 @@ def save_to_csv(file_name, data, logger):
         writer.writeheader()
         writer.writerows(data)
     
-    logger.info(f"Uložen soubor: {csv_file}")
+    logger.info(f"File saved: {csv_file}")
 
 # Parse HEADER
 def parse_BME_header(root, file_name, logger):
     header = next(root.iterfind(".//HEADER"), None)
     if not header:
-        logger.warning("Nenalezen HEADER v XML souboru.")
+        logger.warning("HEADER in XML-Data not found.")
         return
     
-    logger.info("Analýza HEADER dat.")
+    logger.info("Analysing HEADER dat.")
     parsed_header = parse_element(header, logger)
     lang_def = parsed_header.get("CATALOG", {}).get("LANGUAGE @default:true", parsed_header.get("CATALOG", {}).get("LANGUAGE", ''))
-    logger.info(f"Výchozí jazyk: {lang_def}")
+    logger.info(f"Default language:: {lang_def}")
     logger.debug("Header data: %s", parsed_header)
     flat_header = flatten_dict(parsed_header)
-    save_to_csv(f"{file_name}_hlavicka", [flat_header], logger)
+    save_to_csv(f"{file_name}_header", [flat_header], logger)
 
-# Parse Products
 def parse_BME_products(root, file_name, logger):
     all_product_entries, all_mime_entries, all_keyword_entries = [], [], []
+    all_packing_entries, all_udx_logistics_entries = [], []
 
-    logger.info("Analýza PRODUCT dat.")
+    logger.info("PRODUCT data analysis")
 
     for product in root.iterfind(".//PRODUCT"):
         product_data = parse_element(product, logger)
         supplier_pid = next((product_data[key] for key in product_data if key.startswith("SUPPLIER_PID")), "N/A")
         product_details = product_data.get("PRODUCT_DETAILS", {})
-        logger.debug(f"Zpracovávám produkt:{supplier_pid}")
-        
-        
+        logger.debug(f"I am processing the product:{supplier_pid}")
+
         # EAN parse
-        # Normalize keys for case-insensitive matching
         product_details_lower = {key.lower(): value for key, value in product_details.items()}
         ean_keys = ["ean", "international_pid @type:ean", "international_pid @type:gtin"]
         inter_pid_ean = next((product_details_lower[key] for key in ean_keys if key in product_details_lower), None)
         logger.debug(f"EAN: {inter_pid_ean}")
         if not inter_pid_ean:
-            logger.warning(f"EAN nenalezen u produktu {supplier_pid}")
-        
+            logger.warning(f"EAN not found for product {supplier_pid}")
+
         # Parse product details
         product_entries = parse_BME_product(product_data, logger)
         for entry in product_entries:
@@ -126,82 +126,112 @@ def parse_BME_products(root, file_name, logger):
         keyword_entries = parse_BME_keyword(product_data, logger)
         all_keyword_entries.extend(keyword_entries)
 
-    save_to_csv(f"{file_name}_produkty", all_product_entries, logger)
-    save_to_csv(f"{file_name}_soubory", all_mime_entries, logger)
-    save_to_csv(f"{file_name}_klicova_slova", all_keyword_entries, logger)
+        # ---- NEW: Parse UDX packing + logistics ----
+        packing_units, udx_logistics = parse_udx_packing_and_logistics(product_data, logger)
+
+        # packing_units is a list
+        for pu in packing_units:
+            pu["SUPPLIER_PID"] = supplier_pid
+            pu["EAN"] = inter_pid_ean
+            all_packing_entries.append(pu)
+
+        # udx_logistics is a dict (single record)
+        if udx_logistics:
+            udx_logistics["SUPPLIER_PID"] = supplier_pid
+            udx_logistics["EAN"] = inter_pid_ean
+            all_udx_logistics_entries.append(udx_logistics)
+
+    save_to_csv(f"{file_name}_products", all_product_entries, logger)
+    save_to_csv(f"{file_name}_files", all_mime_entries, logger)
+    save_to_csv(f"{file_name}_keywords", all_keyword_entries, logger)
+
+    # NEW: packing units and logistics
+    save_to_csv(f"{file_name}_packing_units", all_packing_entries, logger)
+    save_to_csv(f"{file_name}_udx_logistics", all_udx_logistics_entries, logger)
+
+
+
+
+
+
+
 
 # Parse MIME    
 def parse_BME_mime(data, logger):
     mime_entries = []
     valid_mime_codes = {
-        "MD01": "Obrázek výrobku", #Product picture
-        "MD02": "Podobný obrázek", #Similar figure
-        "MD03": "Bezpečnostní list", #Safety data sheet
-        "MD04": "Stránka produktu Deeplink", #Deeplink product page
-        "MD05": "Deeplink REACH", #Deeplink REACH
-        "MD06": "Energetický štítek", #Energy label
-        "MD07": "Datový list výrobku pro energetický štítek", #Product data sheet for energy label
-        "MD08": "Kalibrační certifikát", #Calibration certificate
-        "MD09": "Certifikát", #Certificate
-        "MD10": "Schéma zapojení", #Circuit diagram
-        "MD11": "Regulace stavebních výrobků", #Construction Products Regulation
-        "MD12": "Rozměrový výkres", #Dimensioned drawing
-        "MD13": "Environmentální značka", #Environment label
-        "MD14": "Návod k použití", #Instructions for use
-        "MD15": "Diagram světelného kužele", #Light cone diagram
-        "MD16": "Křivka distribuce světla", #Light Distribution Curve
-        "MD17": "Logo 1c", #Logo 1c
-        "MD18": "Logo 4c", #Logo 4c
-        "MD19": "Luminaire data", #Luminaire data
-        "MD20": "Obrázek prostředí", #Ambient picture
-        "MD21": "Montážní pokyny", #Mounting instruction
-        "MD22": "Datový list výrobku", #Product data sheet
-        "MD23": "Obrázek produktu – zadní pohled", #Product picture back view
-        "MD24": "Obrázek produktu – pohled zespodu", #Product picture bottom view
-        "MD25": "Obrázek produktu – detailní pohled", #Product picture detailed view
-        "MD26": "Obrázek produktu – přední pohled", #Product picture front view
-        "MD27": "Obrázek produktu – šikmý pohled", #Product picture sloping
-        "MD28": "Obrázek produktu – pohled shora", #Product picture top view
-        "MD29": "Obrázek produktu – pohled z levé strany", #Product picture view from the left side
-        "MD30": "Obrázek produktu – pohled z pravé strany", #Product picture view from the right side
-        "MD31": "Osvědčení o schválení", #Seal of approval
-        "MD32": "Technická příručka", #Technical manual
-        "MD32_DE": "Technická příručka_DE", #Technical manual
-        "MD33": "Schválení testu", #Test approval
-        "MD34": "Schéma zapojení", #Wiring diagram
-        "MD35": "Prohlášení dodavatele o preferenčním původu produktu", #Supplier’s declaration for products having preferential origin status
-        "MD36": "Prohlášení", #Declaration, deleted in version 3.1 -> 4.0
-        "MD37": "3D / BIM objekt", #3D / BIM object
-        "MD38": "Dokumentace pro správu, provoz a údržbu", #Management, operation and maintenance document
-        "MD39": "Instruktážní video", #Instructional video
-        "MD40": "Seznam náhradních dílů", #Spare parts list
-        "MD41": "Prodejní brožura", #Sales brochure
-        "MD42": "AVCP Certifikát (Assessment and Verification of Constancy of Performance)", #AVCP certificate (Assessment and Verification of Constancy of Performance)
-        "MD43": "CLP (Classification, Labelling and Packaging)", #CLP (Classification, Labelling and Packaging)
-        "MD44": "ECOP (Environmental Code of Practice)", #ECOP (Environmental Code of Practice)
-        "MD45": "Produktové video", #Product video
-        "MD46": "360° pohled", #360° view
-        "MD47": "Náhled obrázku produktu (MD01)", #Thumbnail of Product picture (MD01)
-        "MD48": "Piktogram/Ikona", #Pictogram/Icon
-        "MD49": "Prohlášení RoHS", #Declaration RoHS
-        "MD50": "Prohlášení CoC (Certifikát shody, požadovaný pro CPR)", #Declaration CoC (Certificate of Conformity, requested for CPR)
-        "MD51": "Prohlášení DOP (Prohlášení o vlastnostech)", #Declaration DOP (Declaration of performance)
-        "MD52": "Prohlášení DOC CE (Prohlášení o shodě CE)", #Declaration DOC CE (Declaration of conformity CE)
-        "MD53": "Prohlášení BREEAM (Metoda environmentálního hodnocení budov BREEAM)", #Declaration BREEAM (Building Research Establishment Environmental Assessment Method)
-        "MD54": "Prohlášení EPD (Environmentální prohlášení o produktu)", #Declaration EPD (Environmental Product Declaration)
-        "MD55": "Prohlášení ETA (Evropské technické posouzení)", #Declaration ETA (European Technical Assessment)
-        "MD56": "Prohlášení o záruce (Záruční list)", #Declaration warranty (Warranty statement)
-        "MD57": "Aplikační video", #Application video
-        "MD58": "Otázky a odpovědi (Q&A video)", #Question and Answer (Q&A video)
-        "MD59": "Obrázek produktu ve čtvercovém formátu", #Product picture square format
-        "MD60": "Rozložený pohled (výkres)", #Exploded view drawing
-        "MD61": "Vývojový diagram", #Flowchart
-        "MD62": "Prezentace produktu", #Product presentation
-        "MD63": "Specification text", #Specification text
-        "MD64": "Line drawing", #Line drawing
-        "MD65": "Pohled na produktovou řadu", #Product family view
-        "MD99": "Ostatní" #Others
+        "MD01": "Product picture",
+        "MD02": "Similar figure",
+        "MD03": "Safety data sheet",
+        "MD04": "Deeplink product page",
+        "MD05": "Deeplink REACH",
+        "MD06": "Energy label",
+        "MD07": "Product data sheet for energy label",
+        "MD08": "Calibration certificate",
+        "MD09": "Certificate",
+        "MD10": "Circuit diagram",
+        "MD11": "Construction Products Regulation",
+        "MD12": "Dimensioned drawing",
+        "MD13": "Environmental label",
+        "MD14": "Instructions for use",
+        "MD15": "Light cone diagram",
+        "MD16": "Light Distribution Curve",
+        "MD17": "Logo 1c",
+        "MD18": "Logo 4c",
+        "MD19": "Luminaire data",
+        "MD20": "Ambient picture",
+        "MD21": "Mounting instruction",
+        "MD22": "Product data sheet",
+        "MD23": "Product picture – back view",
+        "MD24": "Product picture – bottom view",
+        "MD25": "Product picture – detailed view",
+        "MD26": "Product picture – front view",
+        "MD27": "Product picture – angled view",
+        "MD28": "Product picture – top view",
+        "MD29": "Product picture – left side view",
+        "MD30": "Product picture – right side view",
+        "MD31": "Seal of approval",
+        "MD32": "Technical manual",
+        "MD32_DE": "Technical manual_DE",
+        "MD33": "Test approval",
+        "MD34": "Wiring diagram",
+        "MD35": "Supplier’s declaration for products having preferential origin status",
+        "MD36": "Declaration",
+        "MD37": "3D / BIM object",
+        "MD38": "Management, operation and maintenance document",
+        "MD39": "Instructional video",
+        "MD40": "Spare parts list",
+        "MD41": "Sales brochure",
+        "MD42": "AVCP certificate (Assessment and Verification of Constancy of Performance)",
+        "MD43": "CLP (Classification, Labelling and Packaging)",
+        "MD44": "ECOP (Environmental Code of Practice)",
+        "MD45": "Product video",
+        "MD46": "360° view",
+        "MD47": "Thumbnail of product picture (MD01)",
+        "MD48": "Pictogram/Icon",
+        "MD49": "Declaration RoHS",
+        "MD50": "Declaration CoC (Certificate of Conformity, requested for CPR)",
+        "MD51": "Declaration DOP (Declaration of Performance)",
+        "MD52": "Declaration DOC CE (Declaration of Conformity CE)",
+        "MD53": "Declaration BREEAM (Building Research Establishment Environmental Assessment Method)",
+        "MD54": "Declaration EPD (Environmental Product Declaration)",
+        "MD55": "Declaration ETA (European Technical Assessment)",
+        "MD56": "Declaration warranty (Warranty statement)",
+        "MD57": "Application video",
+        "MD58": "Question and Answer (Q&A video)",
+        "MD59": "Product picture – square format",
+        "MD60": "Exploded view drawing",
+        "MD61": "Flowchart",
+        "MD62": "Product presentation",
+        "MD63": "Specification text",
+        "MD64": "Line drawing",
+        "MD65": "Product family view",
+        "MD99": "Others"
     }
+
+
+
+
     user_defined_extensions = data.get("USER_DEFINED_EXTENSIONS", {})
     if user_defined_extensions:
         mime_info = user_defined_extensions.get("UDX.EDXF.MIME_INFO", {})
@@ -213,7 +243,7 @@ def parse_BME_mime(data, logger):
                 mime_entries.extend(mime_data)
     
     # Extract from MIME_INFO (fallback)
-    logger.debug("Hledám MIME_INFO v hlavní struktuře.")
+    logger.debug("Searching for MIME_INFO in the main structure.")
     mime_info = data.get("MIME_INFO", {})
     if mime_info:
         mime_data = mime_info.get("MIME", [])    
@@ -222,6 +252,7 @@ def parse_BME_mime(data, logger):
         elif isinstance(mime_data, list):
             mime_entries.extend(mime_data)
     
+
     # Process MIME attributes
     for entry in mime_entries:
         if isinstance(entry, dict):
@@ -284,3 +315,59 @@ def parse_BME_keyword(product_data, logger):
 
     return [{"SUPPLIER_PID": supplier_pid, "keyword_tag": tag, "keyword_value": value}
             for tag, value in product_details.items() if tag.startswith("KEYWORD") and value]
+
+
+# UDX 
+def strip_udx_prefix(s: str) -> str:
+    if isinstance(s, str) and s.startswith("UDX.EDXF."):
+        return s.split("UDX.EDXF.", 1)[1]
+    return s
+
+
+
+def normalize_lang_nodes(d: dict):
+    # gleiche Logik wie bei MIME: {'@lang': 'de', '#text': '...'} -> 'key @lang:de': '...'
+    for key, value in list(d.items()):
+        if isinstance(value, dict) and '@lang' in value and '#text' in value:
+            d[f"{key} @lang:{value['@lang']}"] = value['#text']
+            del d[key]
+
+def flatten_udx_dict(d: dict) -> dict:
+    out = {}
+    for k, v in d.items():
+        nk = strip_udx_prefix(k)
+        if isinstance(v, dict) and '#text' in v:
+            out[nk] = v.get('#text')
+            if '@lang' in v:
+                out[f"{nk} @lang:{v.get('@lang')}"] = v.get('#text')
+        elif isinstance(v, (str, int, float, bool)) or v is None:
+            out[nk] = v
+        else:
+            # nested dict/list: bei Bedarf raw behalten oder ignorieren
+            out[nk] = v
+    normalize_lang_nodes(out)
+    return out
+
+def parse_udx_packing_and_logistics(data, logger):
+    packing_units = []
+    udx_logistics = {}
+
+    user_defined_extensions = data.get("USER_DEFINED_EXTENSIONS", {})
+    if user_defined_extensions:
+        # PACKING_UNITS
+        pu_container = user_defined_extensions.get("UDX.EDXF.PACKING_UNITS", {})
+        if isinstance(pu_container, dict):
+            pu = pu_container.get("UDX.EDXF.PACKING_UNIT", [])
+            if isinstance(pu, dict):
+                packing_units.append(flatten_udx_dict(pu))
+            elif isinstance(pu, list):
+                for item in pu:
+                    if isinstance(item, dict):
+                        packing_units.append(flatten_udx_dict(item))
+
+        # PRODUCT_LOGISTIC_DETAILS
+        pld = user_defined_extensions.get("UDX.EDXF.PRODUCT_LOGISTIC_DETAILS", {})
+        if isinstance(pld, dict) and pld:
+            udx_logistics = flatten_udx_dict(pld)
+
+    return packing_units, udx_logistics
