@@ -92,6 +92,7 @@ def parse_BME_header(root, file_name, logger):
 def parse_BME_products(root, file_name, logger):
     all_product_entries, all_mime_entries, all_keyword_entries = [], [], []
     all_packing_entries, all_udx_logistics_entries = [], []
+    all_feature_entries = []
 
     logger.info("PRODUCT data analysis")
 
@@ -141,6 +142,14 @@ def parse_BME_products(root, file_name, logger):
             udx_logistics["EAN"] = inter_pid_ean
             all_udx_logistics_entries.append(udx_logistics)
 
+        # NEW: Parse PRODUCT_FEATURES
+        feature_entries = parse_BME_features(product_data, logger)
+        for fe in feature_entries:
+            fe["SUPPLIER_PID"] = supplier_pid
+            fe["EAN"] = inter_pid_ean
+            all_feature_entries.append(fe)
+            
+
     save_to_csv(f"{file_name}_products", all_product_entries, logger)
     save_to_csv(f"{file_name}_files", all_mime_entries, logger)
     save_to_csv(f"{file_name}_keywords", all_keyword_entries, logger)
@@ -148,9 +157,7 @@ def parse_BME_products(root, file_name, logger):
     # NEW: packing units and logistics
     save_to_csv(f"{file_name}_packing_units", all_packing_entries, logger)
     save_to_csv(f"{file_name}_udx_logistics", all_udx_logistics_entries, logger)
-
-
-
+    save_to_csv(f"{file_name}_features", all_feature_entries, logger)
 
 
 
@@ -242,6 +249,7 @@ def parse_BME_mime(data, logger):
             elif isinstance(mime_data, list):
                 mime_entries.extend(mime_data)
     
+
     # Extract from MIME_INFO (fallback)
     logger.debug("Searching for MIME_INFO in the main structure.")
     mime_info = data.get("MIME_INFO", {})
@@ -317,12 +325,143 @@ def parse_BME_keyword(product_data, logger):
             for tag, value in product_details.items() if tag.startswith("KEYWORD") and value]
 
 
-# UDX 
+# NEW: FEATURES 
+def parse_BME_features(product_data, logger):
+    features_block = product_data.get("PRODUCT_FEATURES", {})
+    if not isinstance(features_block, dict) or not features_block:
+        return []
+
+    # FEATURE-Container kann auch "FEATURE @...:..." heißen -> iterieren
+    feature_nodes = []
+    for k, v in features_block.items():
+        tag, _ = split_key(k)
+        if tag == "FEATURE":
+            feature_nodes = v
+            break
+
+    if not feature_nodes:
+        return []
+
+    if isinstance(feature_nodes, dict):
+        feature_nodes = [feature_nodes]
+    elif not isinstance(feature_nodes, list):
+        return []
+
+    # optionale Meta-Daten auf Block-Level
+    ref_system_name, _ = get_first_value(features_block, "REFERENCE_FEATURE_SYSTEM_NAME")
+    ref_group_id, _    = get_first_value(features_block, "REFERENCE_FEATURE_GROUP_ID")
+
+    out = []
+
+    for f in feature_nodes:
+        if not isinstance(f, dict):
+            continue
+
+        # FNAME (Feature-Name)
+        fname_candidates = iter_tag_values(f, "FNAME")
+        if fname_candidates:
+            fname_val, fname_attrs = fname_candidates[0]
+            fname = sanitize_value(fname_val)
+            fname_lang = fname_attrs.get("lang") or fname_attrs.get("xml:lang")
+        else:
+            fname, fname_lang = None, None
+
+        # optional
+        funit_val, _ = get_first_value(f, "FUNIT")
+        forder_val, _ = get_first_value(f, "FORDER")
+
+        funit  = sanitize_value(funit_val)
+        forder = sanitize_value(forder_val)
+
+        # FVALUE: kann mehrfach vorkommen und hat oft @lang
+        fvalue_items = iter_tag_values(f, "FVALUE")
+
+        if not fvalue_items:
+            out.append({
+                "REFERENCE_FEATURE_SYSTEM_NAME": sanitize_value(ref_system_name),
+                "REFERENCE_FEATURE_GROUP_ID": sanitize_value(ref_group_id),
+                "FNAME": fname,
+                "FNAME_LANG": fname_lang,
+                "FVALUE": None,
+                "FVALUE_LANG": None,
+                "FUNIT": funit,
+                "FORDER": forder
+            })
+            continue
+
+        for fval, fattrs in fvalue_items:
+            fvalue_lang = fattrs.get("lang") or fattrs.get("xml:lang")
+            out.append({
+                "REFERENCE_FEATURE_SYSTEM_NAME": sanitize_value(ref_system_name),
+                "REFERENCE_FEATURE_GROUP_ID": sanitize_value(ref_group_id),
+                "FNAME": fname,
+                "FNAME_LANG": fname_lang,
+                "FVALUE": sanitize_value(fval),
+                "FVALUE_LANG": fvalue_lang,
+                "FUNIT": funit,
+                "FORDER": forder
+            })
+
+    return out
+
+
+
+def split_key(k: str):
+    # "FVALUE @lang:de @type:x" -> ("FVALUE", {"lang":"de","type":"x"})
+    parts = str(k).split()
+    tag = parts[0] if parts else ""
+    attrs = {}
+    for p in parts[1:]:
+        if p.startswith("@") and ":" in p[1:]:
+            a, v = p[1:].split(":", 1)
+            attrs[a] = v
+    return tag, attrs
+
+def get_first_value(d: dict, wanted_tag: str):
+    if not isinstance(d, dict):
+        return None, None
+    for k, v in d.items():
+        tag, attrs = split_key(k)
+        if tag == wanted_tag:
+            return v, attrs
+    return None, None
+
+def iter_tag_values(d: dict, wanted_tag: str):
+    """
+    Liefert Liste von (value, attrs) für alle Keys, deren Tag = wanted_tag ist.
+    Berücksichtigt Listenwerte.
+    """
+    out = []
+    if not isinstance(d, dict):
+        return out
+
+    for k, v in d.items():
+        tag, attrs = split_key(k)
+        if tag != wanted_tag:
+            continue
+
+        if isinstance(v, list):
+            for item in v:
+                out.append((item, attrs))
+        else:
+            out.append((v, attrs))
+    return out
+
+def sanitize_value(value):
+    if isinstance(value, str):
+        return value.replace("\n", " ").replace("\r", " ").strip()
+    return value
+
+
+
+
+
+
+# NEW: UDX 
 def strip_udx_prefix(s: str) -> str:
     if isinstance(s, str) and s.startswith("UDX.EDXF."):
         return s.split("UDX.EDXF.", 1)[1]
     return s
-
 
 
 def normalize_lang_nodes(d: dict):
